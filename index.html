@@ -1,11 +1,402 @@
-<!-- index.html -->
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>MultiEmbed</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MultiEmbed Sync</title>
+    <!-- Load Tailwind CSS for responsive styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load PeerJS for real-time peer-to-peer communication -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <!-- Reintroducing QR code library from a stable CDN (davidshimjs qrcode.js) -->
+    <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
+    <style>
+        /* Use Inter font for a modern look */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            min-height: 100vh;
+        }
+        /* Custom styles for video responsiveness */
+        .video-container {
+            position: relative;
+            width: 100%;
+            padding-top: 56.25%; /* 16:9 Aspect Ratio (315/560 = 0.5625) */
+            background-color: #1f2937; /* Dark background while loading */
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        .video-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
 </head>
-<body>
-    <iframe width="560" height="315" src="https://www.youtube.com/embed/i6TzP2COtow?si=Yc9NyEzRsnUBHzK9" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
-    <iframe width="560" height="315" src="https://www.youtube.com/embed/X4o2Ew7EF-g?si=Nnvk2A9e844nJbMt" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+<body class="p-4 md:p-8">
+
+    <div id="app-container" class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <header class="text-center mb-10">
+            <h1 class="text-3xl font-bold text-gray-800">MultiEmbed Sync</h1>
+            <p id="mode-subtitle" class="text-lg text-gray-600 mt-1">Initializing...</p>
+        </header>
+
+        <!-- Dynamic Content Area -->
+        <div id="content-area">
+            <!-- Content for Host or Controller will be inserted here by JavaScript -->
+        </div>
+
+        <!-- Connection Status Display (Common to both modes) -->
+        <div id="status-display" class="mt-8 p-4 text-center rounded-lg shadow-md transition-all duration-300">
+            <p class="font-semibold" id="connection-status">
+                Waiting for PeerJS initialization...
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration and Utilities ---
+
+        const APP_ID = 'multiembed-sync-v1'; // Unique identifier for PeerJS connections
+        const initialVideoUrls = [
+            'https://www.youtube.com/embed/i6TzP2COtow?si=Yc9NyEzRsnUBHzK9',
+            'https://www.youtube.com/embed/X4o2Ew7EF-g?si=Nnvk2A9e844nJbMt'
+        ];
+        
+        let peer = null;
+        let dataConnection = null;
+        let isHost = false;
+
+        const contentArea = document.getElementById('content-area');
+        const statusDisplay = document.getElementById('status-display');
+        const modeSubtitle = document.getElementById('mode-subtitle');
+        const connectionStatusText = document.getElementById('connection-status');
+
+        /**
+         * Safely extracts a URL parameter from the current location.
+         * @param {string} name - The parameter name (e.g., 'hostId').
+         */
+        function getUrlParameter(name) {
+            name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+            const regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+            const results = regex.exec(location.search);
+            return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
+        }
+
+        /**
+         * Converts a standard YouTube watch URL to an embed URL.
+         * Returns null if not a valid YouTube URL.
+         * @param {string} url - The URL from the input field.
+         * @returns {string | null} The embed URL.
+         */
+        function convertToEmbedUrl(url) {
+            const watchMatch = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+            if (watchMatch && watchMatch[1]) {
+                // Return embed URL with common parameters
+                return `https://www.youtube.com/embed/${watchMatch[1]}?autoplay=0&controls=1`;
+            }
+            // If it looks like it's already an embed URL, just return it
+            if (url && url.includes('youtube.com/embed/')) {
+                return url;
+            }
+            return null;
+        }
+
+        /**
+         * Debounce function to limit how often a function is called.
+         * @param {function} func - The function to call.
+         * @param {number} delay - The delay in milliseconds.
+         */
+        function debounce(func, delay) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+        
+        // --- UI Rendering ---
+
+        /**
+         * Updates the global connection status message and styling.
+         * @param {string} message
+         * @param {'info'|'success'|'error'} type
+         */
+        function updateStatus(message, type = 'info') {
+            connectionStatusText.textContent = message;
+            statusDisplay.className = 'mt-8 p-4 text-center rounded-lg shadow-md transition-all duration-300';
+            
+            if (type === 'success') {
+                statusDisplay.classList.add('bg-green-100', 'text-green-700', 'border-2', 'border-green-400');
+            } else if (type === 'error') {
+                statusDisplay.classList.add('bg-red-100', 'text-red-700', 'border-2', 'border-red-400');
+            } else {
+                statusDisplay.classList.add('bg-blue-100', 'text-blue-700', 'border-2', 'border-blue-400');
+            }
+        }
+
+        // --- Host Mode Logic ---
+
+        /**
+         * Renders the Host UI: videos and QR code.
+         * @param {string} peerId - The Host's generated PeerJS ID.
+         */
+        function setupHostUI(peerId) {
+            modeSubtitle.textContent = 'Host Mode: Displaying Videos';
+            isHost = true;
+            
+            // Generate the controller URL using the host's ID
+            const controllerUrl = `${document.location.origin}${document.location.pathname}?hostId=${peerId}`;
+
+            contentArea.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+                    <div id="video-1" class="video-container shadow-xl">
+                        <iframe id="iframe-1" src="${initialVideoUrls[0]}" allowfullscreen></iframe>
+                    </div>
+                    <div id="video-2" class="video-container shadow-xl">
+                        <iframe id="iframe-2" src="${initialVideoUrls[1]}" allowfullscreen></iframe>
+                    </div>
+                </div>
+
+                <div class="p-6 bg-white rounded-xl shadow-2xl text-center md:flex md:justify-around md:items-center">
+                    <div class="mb-4 md:mb-0 md:text-left">
+                        <h2 class="text-xl font-semibold text-gray-800">Controller Link</h2>
+                        <p class="text-gray-600">Scan the QR code below on your mobile device or use the link directly.</p>
+                        
+                        <!-- Display Host ID -->
+                        <p class="mt-2 text-sm font-mono p-2 bg-gray-100 rounded break-all">
+                            Host ID: <span class="font-bold text-indigo-600">${peerId}</span>
+                        </p>
+                        
+                        <!-- Display Controller URL for debugging - now a clickable link with consistent styling -->
+                        <p class="mt-2 text-sm font-mono p-2 bg-gray-100 rounded break-all">
+                            Controller URL: <a href="${controllerUrl}" target="_blank" class="font-bold text-indigo-600 hover:text-indigo-700 transition duration-150">${controllerUrl}</a>
+                        </p>
+                    </div>
+                    <!-- QR Code Container: Now a standard div -->
+                    <div id="qrcode-container" class="inline-block p-2 bg-white rounded-lg border border-gray-200 w-48 h-48 mx-auto">
+                        <p class="text-center text-sm text-gray-400 pt-16">Generating QR...</p>
+                    </div>
+                </div>
+            `;
+            
+            // Generate QR Code using the correct constructor API, wrapped in a small timeout 
+            // to ensure the DOM element is rendered before the library tries to attach.
+            setTimeout(() => {
+                const qrContainer = document.getElementById('qrcode-container');
+
+                if (typeof QRCode !== 'undefined') {
+                    try {
+                        // qrcode.js (davidshimjs) uses a constructor to draw into a target element
+                        new QRCode(qrContainer, {
+                            text: controllerUrl,
+                            width: 192, // Matches w-48 utility class (12rem)
+                            height: 192, // Matches h-48 utility class (12rem)
+                            colorDark : "#1e293b", // Slate 800
+                            colorLight : "#ffffff",
+                            correctLevel : QRCode.CorrectLevel.H
+                        });
+                        // Remove the placeholder text on success
+                        const placeholder = qrContainer.querySelector('p');
+                        if (placeholder) placeholder.remove();
+
+                    } catch (err) {
+                        console.error('QR Code generation failed using new QRCode()', err);
+                        qrContainer.innerHTML = `<p class="text-red-500 text-sm p-4 text-center">QR Code failed to draw. URL: ${controllerUrl}</p>`;
+                    }
+                } else {
+                     qrContainer.innerHTML = `<p class="text-red-500 text-sm p-4 text-center">QR Code library not found. Please use the Host ID.</p>`;
+                }
+            }, 0);
+        }
+
+        /**
+         * Updates the iframes with new URLs received from the Controller.
+         * @param {string[]} urls - Array of two YouTube URLs.
+         */
+        function updateIframes(urls) {
+            const embedUrl1 = convertToEmbedUrl(urls[0]);
+            const embedUrl2 = convertToEmbedUrl(urls[1]);
+
+            if (embedUrl1) {
+                document.getElementById('iframe-1').src = embedUrl1;
+            }
+            if (embedUrl2) {
+                document.getElementById('iframe-2').src = embedUrl2;
+            }
+            
+            // Optionally, send a confirmation back
+            if (dataConnection) {
+                 dataConnection.send({ type: 'ACK', status: 'Updated' });
+            }
+        }
+
+        // --- Controller Mode Logic ---
+
+        /**
+         * Renders the Controller UI: two input fields.
+         * @param {string} hostId - The ID of the Host to connect to.
+         */
+        function setupControllerUI(hostId) {
+            modeSubtitle.textContent = `Controller Mode: Connecting to Host ${hostId}`;
+
+            contentArea.innerHTML = `
+                <div class="bg-white p-6 md:p-10 rounded-xl shadow-2xl space-y-6 max-w-lg mx-auto">
+                    <p class="text-gray-600 text-sm">Paste full YouTube watch links (or embed links) below. They will sync instantly to the Host.</p>
+                    <div>
+                        <label for="url-1" class="block text-sm font-medium text-gray-700 mb-1">Video 1 URL</label>
+                        <input type="text" id="url-1" placeholder="e.g. https://www.youtube.com/watch?v=..." 
+                               class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
+                               value="${initialVideoUrls[0] || ''}">
+                    </div>
+                    <div>
+                        <label for="url-2" class="block text-sm font-medium text-gray-700 mb-1">Video 2 URL</label>
+                        <input type="text" id="url-2" placeholder="e.g. https://www.youtube.com/watch?v=..." 
+                               class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
+                               value="${initialVideoUrls[1] || ''}">
+                    </div>
+                </div>
+            `;
+            
+            // Initial data send (using the debounce function)
+            const sendUrlsDebounced = debounce(sendNewUrls, 500);
+
+            document.getElementById('url-1').addEventListener('input', sendUrlsDebounced);
+            document.getElementById('url-2').addEventListener('input', sendUrlsDebounced);
+            
+            // REMOVED: Initial sendNewUrls() call here to prevent sending data before the connection is established.
+        }
+
+        /**
+         * Sends the current URLs from the input fields to the Host.
+         */
+        function sendNewUrls() {
+            console.log(dataConnection, dataConnection.remoteId, getUrlParameter('hostId'));
+            if (!dataConnection || dataConnection.peer !== getUrlParameter('hostId')) {
+                updateStatus('Attempting to send data, but connection is not ready.', 'error');
+                return;
+            }
+
+            const url1 = document.getElementById('url-1').value;
+            const url2 = document.getElementById('url-2').value;
+            
+            const payload = {
+                type: 'URL_UPDATE',
+                urls: [url1, url2]
+            };
+            
+            dataConnection.send(payload);
+            updateStatus('URLs sent to Host...', 'info');
+        }
+
+        // --- PeerJS Core Logic (Common) ---
+
+        /**
+         * Initializes PeerJS and sets up listeners.
+         */
+        function initPeer() {
+            // Initialize PeerJS using the default cloud server for simplicity
+            peer = new Peer();
+            
+            peer.on('open', (id) => {
+                const hostId = getUrlParameter('hostId');
+                
+                if (hostId) {
+                    // CONTROLLER MODE
+                    updateStatus(`Connecting to Host ${hostId}...`, 'info');
+                    setupControllerUI(hostId);
+                    connectToHost(hostId);
+                } else {
+                    // HOST MODE
+                    updateStatus(`Host ID generated: ${id}. Waiting for connection...`, 'info');
+                    setupHostUI(id);
+                    peer.on('connection', handleHostConnection);
+                }
+            });
+
+            peer.on('error', (err) => {
+                console.error('PeerJS Error:', err);
+                updateStatus(`PeerJS connection failed: ${err.type}. Check console for details.`, 'error');
+            });
+        }
+        
+        // --- Connection Handlers ---
+
+        /**
+         * Host side: Handles a new incoming connection.
+         */
+        function handleHostConnection(conn) {
+            // Only accept one controller connection
+            if (dataConnection) {
+                console.warn('Host already connected. Rejecting new connection.');
+                conn.close();
+                return;
+            }
+
+            dataConnection = conn;
+
+            dataConnection.on('open', () => {
+                updateStatus(`Controller connected! ID: ${dataConnection.peer}`, 'success');
+            });
+
+            dataConnection.on('data', (data) => {
+                if (data.type === 'URL_UPDATE' && Array.isArray(data.urls) && data.urls.length === 2) {
+                    updateIframes(data.urls);
+                    updateStatus(`New URLs received from Controller.`, 'success');
+                } else {
+                    console.warn('Received unknown data:', data);
+                }
+            });
+
+            dataConnection.on('close', () => {
+                dataConnection = null;
+                updateStatus('Controller disconnected. Waiting for a new connection...', 'error');
+            });
+
+            dataConnection.on('error', (err) => {
+                console.error('Data connection error on Host:', err);
+                updateStatus(`Connection error: ${err.message}.`, 'error');
+            });
+        }
+
+        /**
+         * Controller side: Initiates connection to the Host.
+         * @param {string} hostId - The ID of the Host.
+         */
+        function connectToHost(hostId) {
+            dataConnection = peer.connect(hostId, { reliable: true });
+
+            dataConnection.on('open', () => {
+                updateStatus(`Successfully connected to Host ${hostId}! Try changing the URLs.`, 'success');
+                
+                // Send the initial state now that the connection is open, preventing the timing error.
+                // sendNewUrls(); 
+            });
+
+            dataConnection.on('data', (data) => {
+                 if (data.type === 'ACK') {
+                    updateStatus('URLs successfully updated on the Host!', 'success');
+                 }
+            });
+            
+            dataConnection.on('close', () => {
+                dataConnection = null;
+                updateStatus('Disconnected from Host. Please refresh to reconnect.', 'error');
+            });
+
+            dataConnection.on('error', (err) => {
+                console.error('Data connection error on Controller:', err);
+                updateStatus(`Connection failed: ${err.message}. Check host ID.`, 'error');
+            });
+        }
+        
+        // --- Start Application ---
+        document.addEventListener('DOMContentLoaded', initPeer);
+    </script>
+
 </body>
 </html>
