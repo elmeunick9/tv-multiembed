@@ -215,23 +215,46 @@
         }
 
         /**
-         * Updates the iframes with new URLs received from the Controller.
-         * @param {string[]} urls - Array of two YouTube URLs.
+         * Updates the iframes with new URLs received from the Controller,
+         * only replacing the video that has actually changed.
+         * @param {string[]} urls - Array of two YouTube URLs [url1, url2].
          */
         function updateIframes(urls) {
-            const embedUrl1 = convertToEmbedUrl(urls[0]);
-            const embedUrl2 = convertToEmbedUrl(urls[1]);
+            // Process the incoming URLs into embed format
+            const incomingEmbedUrl1 = convertToEmbedUrl(urls[0]);
+            const incomingEmbedUrl2 = convertToEmbedUrl(urls[1]);
 
-            if (embedUrl1) {
-                document.getElementById('iframe-1').src = embedUrl1;
+            let updateCount = 0;
+
+            // --- Video 1 Update Logic ---
+            const iframe1 = document.getElementById('iframe-1');
+            if (iframe1 && incomingEmbedUrl1) {
+                const currentSrc1 = iframe1.src;
+                
+                // Only update if the new URL is different from the current one
+                if (!currentSrc1.includes(incomingEmbedUrl1)) {
+                    iframe1.src = incomingEmbedUrl1;
+                    updateCount++;
+                    console.log('Video 1 updated:', incomingEmbedUrl1);
+                }
             }
-            if (embedUrl2) {
-                document.getElementById('iframe-2').src = embedUrl2;
+
+            // --- Video 2 Update Logic ---
+            const iframe2 = document.getElementById('iframe-2');
+            if (iframe2 && incomingEmbedUrl2) {
+                const currentSrc2 = iframe2.src;
+                
+                // Only update if the new URL is different from the current one
+                if (!currentSrc2.includes(incomingEmbedUrl2)) {
+                    iframe2.src = incomingEmbedUrl2;
+                    updateCount++;
+                    console.log('Video 2 updated:', incomingEmbedUrl2);
+                }
             }
             
             // Optionally, send a confirmation back
             if (dataConnection) {
-                 dataConnection.send({ type: 'ACK', status: 'Updated' });
+                 dataConnection.send({ type: 'ACK', status: `Updated ${updateCount} video(s)` });
             }
         }
 
