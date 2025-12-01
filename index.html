@@ -97,7 +97,7 @@
             const watchMatch = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
             if (watchMatch && watchMatch[1]) {
                 // Return embed URL with common parameters
-                return `https://www.youtube.com/embed/${watchMatch[1]}?autoplay=0&controls=1`;
+                return `https://www.youtube.com/embed/${watchMatch[1]}?autoplay=1&controls=1`;
             }
             // If it looks like it's already an embed URL, just return it
             if (url && url.includes('youtube.com/embed/')) {
@@ -235,7 +235,7 @@
                 if (!currentSrc1.includes(incomingEmbedUrl1)) {
                     iframe1.src = incomingEmbedUrl1;
                     updateCount++;
-                    console.log('Video 1 updated:', incomingEmbedUrl1);
+                    console.log('Video 1 updated:', incomingEmbedUrl1, currentSrc1);
                 }
             }
 
@@ -248,7 +248,7 @@
                 if (!currentSrc2.includes(incomingEmbedUrl2)) {
                     iframe2.src = incomingEmbedUrl2;
                     updateCount++;
-                    console.log('Video 2 updated:', incomingEmbedUrl2);
+                    console.log('Video 2 updated:', incomingEmbedUrl2, currentSrc2);
                 }
             }
             
